@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flow Field</title>
+<style>
+  :root { --bg: #0b0d12; --fg: #e8e6e1; --muted: #8a8f9c; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
+    font: 14px/1.4 system-ui, -apple-system, sans-serif; overflow: hidden; }
+  canvas { display: block; width: 100vw; height: 100vh; cursor: crosshair; }
+  .hud { position: fixed; left: 16px; bottom: 16px; right: 16px; display: flex;
+    gap: 8px; flex-wrap: wrap; align-items: center; pointer-events: none; }
+  .hud > * { pointer-events: auto; }
+  button { background: rgba(255,255,255,.08); color: var(--fg); border: 1px solid rgba(255,255,255,.15);
+    border-radius: 999px; padding: 6px 14px; font: inherit; cursor: pointer; backdrop-filter: blur(6px); }
+  button:hover { background: rgba(255,255,255,.16); }
+  .hint { color: var(--muted); margin-left: auto; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div class="hud">
+  <button id="reseed">New field</button>
+  <button id="palette">Palette</button>
+  <button id="pause">Pause</button>
+  <button id="save">Save PNG</button>
+  <span class="hint">Drag to stir · Space to pause</span>
+</div>
+<script>
+(() => {
+  const c = document.getElementById('c');
+  const ctx = c.getContext('2d');
+  const palettes = [
+    ['#ff6b6b', '#feca57', '#48dbfb', '#ff9ff3', '#1dd1a1'],
+    ['#f8f9fa', '#adb5bd', '#6c757d', '#ced4da', '#e9ecef'],
+    ['#ffbe0b', '#fb5607', '#ff006e', '#8338ec', '#3a86ff'],
+    ['#2ec4b6', '#cbf3f0', '#ffbf69', '#ff9f1c', '#ffffff'],
+  ];
+  let W, H, dpr, particles = [], seed, palIdx = 0, paused = false;
+  let mouse = { x: -1e9, y: -1e9, down: false };
+
+  // Cheap smooth 2D value noise
+  let perm;
+  function reseedNoise() {
+    seed = Math.random() * 1e4;
+    perm = new Uint8Array(512);
+    const p = [...Array(256).keys()].sort(() => Math.random() - 0.5);
+    for (let i = 0; i < 512; i++) perm[i] = p[i & 255];
+  }
+  const fade = t => t * t * (3 - 2 * t);
+  function noise(x, y) {
+    const xi = Math.floor(x) & 255, yi = Math.floor(y) & 255;
+    const xf = x - Math.floor(x), yf = y - Math.floor(y);
+    const h = (i, j) => perm[perm[xi + i] + yi + j] / 255;
+    const u = fade(xf), v = fade(yf);
+    const a = h(0,0) + (h(1,0) - h(0,0)) * u;
+    const b = h(0,1) + (h(1,1) - h(0,1)) * u;
+    return a + (b - a) * v;
+  }
+
+  function resize() {
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    W = innerWidth; H = innerHeight;
+    c.width = W * dpr; c.height = H * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    clear();
+  }
+  function clear() { ctx.fillStyle = '#0b0d12'; ctx.fillRect(0, 0, W, H); }
+
+  function spawn() {
+    const pal = palettes[palIdx];
+    return { x: Math.random() * W, y: Math.random() * H, life: 100 + Math.random() * 300,
+             color: pal[(Math.random() * pal.length) | 0] };
+  }
+  function populate() {
+    const n = Math.min(4000, Math.floor(W * H / 250));
+    particles = Array.from({ length: n }, spawn);
+  }
+
+  function step(t) {
+    if (!paused) {
+      ctx.fillStyle = 'rgba(11,13,18,0.03)';
+      ctx.fillRect(0, 0, W, H);
+      const scale = 0.0025, time = t * 0.00005;
+      ctx.lineWidth = 1;
+      for (const p of particles) {
+        let a = noise(p.x * scale + seed, p.y * scale + time) * Math.PI * 4;
+        let vx = Math.cos(a), vy = Math.sin(a);
+        const dx = p.x - mouse.x, dy = p.y - mouse.y, d2 = dx * dx + dy * dy;
+        if (mouse.down && d2 < 22500) { // swirl around the cursor
+          const f = (1 - d2 / 22500) * 3;
+          vx += -dy / Math.sqrt(d2 + 1) * f; vy += dx / Math.sqrt(d2 + 1) * f;
+        }
+        const nx = p.x + vx * 1.6, ny = p.y + vy * 1.6;
+        ctx.strokeStyle = p.color; ctx.globalAlpha = 0.35;
+        ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(nx, ny); ctx.stroke();
+        p.x = nx; p.y = ny;
+        if (--p.life < 0 || p.x < 0 || p.x > W || p.y < 0 || p.y > H) Object.assign(p, spawn());
+      }
+      ctx.globalAlpha = 1;
+    }
+    requestAnimationFrame(step);
+  }
+
+  const setPos = e => { const pt = e.touches ? e.touches[0] : e; mouse.x = pt.clientX; mouse.y = pt.clientY; };
+  c.addEventListener('pointerdown', e => { mouse.down = true; setPos(e); });
+  addEventListener('pointermove', setPos);
+  addEventListener('pointerup', () => mouse.down = false);
+  addEventListener('resize', () => { resize(); populate(); });
+  const togglePause = () => { paused = !paused; document.getElementById('pause').textContent = paused ? 'Play' : 'Pause'; };
+  addEventListener('keydown', e => { if (e.code === 'Space') { e.preventDefault(); togglePause(); } });
+  document.getElementById('pause').onclick = togglePause;
+  document.getElementById('reseed').onclick = () => { reseedNoise(); clear(); populate(); };
+  document.getElementById('palette').onclick = () => { palIdx = (palIdx + 1) % palettes.length; populate(); };
+  document.getElementById('save').onclick = () => {
+    const a = document.createElement('a'); a.download = 'flow-field.png'; a.href = c.toDataURL(); a.click();
+  };
+
+  reseedNoise(); resize(); populate(); requestAnimationFrame(step);
+})();
+</script>
+</body>
+</html>
